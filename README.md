@@ -45,8 +45,9 @@ feat update my_feature
 feat sync
 
 # View features from other projects
-feat projects              # List all projects in brain
-feat docs rsb global       # View RSB's global feature from anywhere
+feat projects                  # List all projects in brain
+feat docs rsb global           # View RSB's global feature from anywhere
+feat docs blade-py readme      # View blade-py README from anywhere
 ```
 
 ## Requirements
@@ -145,6 +146,7 @@ Content outside sentinel blocks is preserved.
 | `feat scan <feature> --format json` | JSON output |
 | `feat docs <feature>` | Display feature documentation (with boxy) |
 | `feat docs <project> <feature>` | Display feature from any project in brain |
+| `feat docs <project> readme` | Display project README from brain |
 | `feat docs <feature> --view=data` | Plain output for AI/scripting |
 | `feat update <feature>` | Update feature documentation |
 | `feat update <feature> --doc <path>` | Update specific doc file |
@@ -215,8 +217,9 @@ feat docs colors --view=data # Plain output for AI
 
 **How it works:**
 1. Run `feat sync` in any project to update docs and sync to brain
-2. Brain stores: `<project>/.spec.toml` + all `FEATURES_*.md` files
+2. Brain stores: `<project>/.spec.toml` + `README.md` + all `FEATURES_*.md` files
 3. Access features from any project using `feat docs <project> <feature>`
+4. Access READMEs using `feat docs <project> readme`
 
 **Project name detection (fallback chain):**
 1. `.spec.toml` - `project_name = "my-project"`
@@ -235,6 +238,10 @@ feat projects
 # View feature from another project (from anywhere)
 feat docs rsb global
 feat docs my-project networking
+
+# View project README
+feat docs blade-py readme
+feat docs feat-py readme
 ```
 
 **Brain structure:**
@@ -242,12 +249,26 @@ feat docs my-project networking
 ~/repos/docs/brain/dev/proj/feat/
 ├── rsb/
 │   ├── .spec.toml
+│   ├── README.md
 │   ├── FEATURES_GLOBAL.md
 │   ├── FEATURES_CLI.md
 │   └── ...
+├── blade-py/
+│   ├── .spec.toml
+│   └── README.md          # README-only projects work too!
 ├── my-project/
 │   ├── .spec.toml
+│   ├── README.md
 │   └── FEATURES_*.md
+```
+
+**README-only projects:**
+Projects without feature modules can still sync their README to brain:
+```toml
+# .spec.toml for README-only projects
+project_name = "my-tool"
+languages = ["python"]
+auto_discover = false  # No features to discover
 ```
 
 ## Boxy Integration
