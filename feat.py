@@ -6,10 +6,10 @@ documents public API surfaces across codebases. Works with Rust, Python,
 and other languages through a pluggable parser system.
 
 Convention over configuration: Works zero-config by scanning source trees,
-with optional `.feat.toml` for customization.
+with optional `.spec.toml` for customization.
 
 Usage examples:
-    feat2.py init                          # Generate .feat.toml config
+    feat2.py init                          # Generate .spec.toml config
     feat2.py list                          # Show discovered features
     feat2.py list --verbose                # Include paths and counts
     feat2.py scan global                   # Inspect feature surface
@@ -20,7 +20,7 @@ Usage examples:
     feat2.py --paths src/custom.rs         # Direct file inspection
 
 Configuration:
-    Place `.feat.toml` in repository root to customize behavior.
+    Place `.spec.toml` in repository root to customize behavior.
     See FEAT2_STRATEGY.md for full configuration schema.
 
 Links:
@@ -32,8 +32,11 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import os
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 from abc import ABC, abstractmethod
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
@@ -46,6 +49,72 @@ except ImportError:
         import tomli as tomllib  # type: ignore
     except ImportError:
         tomllib = None  # type: ignore
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BOXY INTEGRATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Boxy integration for pretty terminal output
+USE_BOXY = os.environ.get('REPOS_USE_BOXY', '0') == '0'  # Shell convention: 0=true (default enabled), 1=false
+BOXY_AVAILABLE = False
+
+def check_boxy_availability():
+    """Check if boxy is available and working"""
+    global BOXY_AVAILABLE
+    if not USE_BOXY:
+        return False
+
+    boxy_path = shutil.which("boxy")
+    if not boxy_path:
+        return False
+
+    # Test if boxy actually works
+    try:
+        result = subprocess.run(
+            [boxy_path, "--version"],
+            capture_output=True,
+            timeout=2
+        )
+        BOXY_AVAILABLE = result.returncode == 0
+        return BOXY_AVAILABLE
+    except:
+        BOXY_AVAILABLE = False
+        return False
+
+# Check once at startup
+check_boxy_availability()
+
+def render_with_boxy(content: str, title: str = "", theme: str = "info", width: str = "max") -> str:
+    """Render content with boxy using appropriate themes"""
+    if not BOXY_AVAILABLE:
+        return content
+
+    boxy_path = shutil.which("boxy")
+    if not boxy_path:
+        return content
+
+    try:
+        cmd = [boxy_path, "--use", theme]
+        if title:
+            cmd.extend(["--title", title])
+        if width:
+            cmd.extend(["--width", str(width)])
+
+        result = subprocess.run(
+            cmd,
+            input=content.encode('utf-8'),
+            capture_output=True,
+            text=False,
+            timeout=5
+        )
+
+        if result.returncode == 0:
+            return result.stdout.decode('utf-8', errors='replace')
+    except Exception:
+        pass
+
+    return content
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -83,10 +152,10 @@ class Feature:
 
 @dataclasses.dataclass(slots=True)
 class Config:
-    """Configuration loaded from .feat.toml or defaults."""
+    """Configuration loaded from .spec.toml or defaults."""
 
     features_root: str = "src"
-    docs_root: str = "docs/features"
+    docs_root: str = "docs/feats"
     doc_pattern: str = "FEATURES_{FEATURE}.md"
     languages: List[str] = dataclasses.field(default_factory=lambda: ["rust"])
     auto_discover: bool = True
@@ -124,7 +193,7 @@ class Config:
             features=data.get("features", {}),
         )
 
-    def validate(self) -> List[str]:
+    def validate(self, repo_root: Optional[pathlib.Path] = None) -> List[str]:
         """Validate configuration, return list of error messages."""
         errors = []
         if not self.features_root:
@@ -133,6 +202,21 @@ class Config:
             errors.append("docs_root cannot be empty")
         if not self.languages:
             errors.append("languages list cannot be empty")
+
+        # Validate language-specific requirements
+        if repo_root:
+            if "rust" in self.languages:
+                if not (repo_root / "Cargo.toml").exists():
+                    errors.append("rust language configured but Cargo.toml not found in repository root")
+            if "python" in self.languages:
+                has_python_marker = any([
+                    (repo_root / "pyproject.toml").exists(),
+                    (repo_root / "setup.py").exists(),
+                    (repo_root / "setup.cfg").exists(),
+                ])
+                if not has_python_marker:
+                    errors.append("python language configured but no pyproject.toml/setup.py found in repository root")
+
         return errors
 
 
@@ -150,11 +234,18 @@ class RepoContext:
         """Initialize with explicit root or auto-detect."""
         if root:
             self.root = root.resolve()
+            # Validate explicit root has repository markers
+            if not self._has_repo_marker(self.root):
+                print(f"error: not a valid repository: {self.root}", file=sys.stderr)
+                print("       (no .git, Cargo.toml, package.json, or pyproject.toml found)", file=sys.stderr)
+                sys.exit(1)
         else:
             detected = self.detect_root(pathlib.Path.cwd())
             if detected is None:
-                print("warning: not in a repository (no .git, Cargo.toml, etc.)", file=sys.stderr)
-                self.root = pathlib.Path.cwd().resolve()
+                print("error: not in a repository", file=sys.stderr)
+                print("       feat requires a valid git repository with project files", file=sys.stderr)
+                print("       (looking for .git, Cargo.toml, package.json, or pyproject.toml)", file=sys.stderr)
+                sys.exit(1)
             else:
                 self.root = detected
 
@@ -168,6 +259,11 @@ class RepoContext:
                     return current
             current = current.parent
         return None
+
+    @staticmethod
+    def _has_repo_marker(path: pathlib.Path) -> bool:
+        """Check if path has any repository markers."""
+        return any((path / marker).exists() for marker in RepoContext.MARKERS)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -693,8 +789,8 @@ TODO: Provide usage examples.
 
 
 def cmd_init(args: argparse.Namespace, repo: RepoContext) -> int:
-    """Initialize .feat.toml configuration file."""
-    config_path = repo.root / ".feat.toml"
+    """Initialize .spec.toml configuration file."""
+    config_path = repo.root / ".spec.toml"
 
     if config_path.exists() and not args.force:
         print(f"error: {config_path} already exists (use --force to overwrite)", file=sys.stderr)
@@ -716,11 +812,12 @@ def cmd_init(args: argparse.Namespace, repo: RepoContext) -> int:
         primary_lang = "rust"  # Default
 
     # Generate config
-    config_content = f'''# feat2.py configuration
+    config_content = f'''# Project specification (.spec.toml)
+# Used by feat, test-py, and other RSB tooling
 # Auto-generated on {pathlib.Path.cwd()}
 
 features_root = "src"
-docs_root = "docs/features"
+docs_root = "docs/feats"
 doc_pattern = "FEATURES_{{FEATURE}}.md"
 languages = ["{primary_lang}"]
 auto_discover = true
@@ -944,9 +1041,66 @@ def cmd_sync(args: argparse.Namespace, config: Config, repo: RepoContext) -> int
     return 0 if failed == 0 else 1
 
 
+def cmd_docs(args: argparse.Namespace, config: Config, repo: RepoContext) -> int:
+    """Display feature documentation."""
+    discovery = Discovery(config, repo)
+    features = discovery.discover()
+
+    feature_name = args.feature
+    if feature_name not in features:
+        print(f"error: unknown feature '{feature_name}'", file=sys.stderr)
+        print(f"run 'feat list' to see available features", file=sys.stderr)
+        return 1
+
+    feature = features[feature_name]
+    resolver = DocResolver(config, repo)
+
+    # Resolve doc path
+    doc_path = resolver.resolve(feature, include_stubs=True)
+
+    if not doc_path:
+        print(f"error: no documentation found for feature '{feature_name}'", file=sys.stderr)
+        print(f"run 'feat update {feature_name}' to create documentation", file=sys.stderr)
+        return 1
+
+    # Check if stub
+    is_stub = resolver.is_stub(doc_path)
+
+    # Read documentation content
+    try:
+        content = doc_path.read_text(encoding='utf-8')
+    except Exception as e:
+        print(f"error: failed to read {doc_path}: {e}", file=sys.stderr)
+        return 1
+
+    # Display based on view mode
+    view_mode = getattr(args, 'view', 'pretty')
+
+    if view_mode == 'data':
+        # Plain output for AI/scripting (no boxy, no decoration)
+        print(content)
+    else:
+        # Pretty output with boxy if available
+        title = f"🎯 Feature: {feature_name.upper()}"
+        if is_stub:
+            title += " [STUB]"
+
+        output = render_with_boxy(content, title=title, theme="info", width="max")
+        print(output)
+
+        # Show path footer
+        print()
+        print(f"📄 Document path: {doc_path}")
+        if is_stub:
+            final_name = doc_path.name.replace(".stub.md", ".md")
+            print(f"   → rename to {final_name} when ready to finalize")
+
+    return 0
+
+
 def cmd_check(args: argparse.Namespace, config: Config, repo: RepoContext) -> int:
     """Validate configuration and features."""
-    errors = config.validate()
+    errors = config.validate(repo.root)
 
     if errors:
         print("Configuration errors:")
@@ -1009,7 +1163,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=pathlib.Path,
-        help="Path to .feat.toml config file (default: auto-detect)"
+        help="Path to .spec.toml config file (default: auto-detect)"
     )
     parser.add_argument(
         "--root",
@@ -1020,7 +1174,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # init
-    parser_init = subparsers.add_parser("init", help="Generate .feat.toml config")
+    parser_init = subparsers.add_parser("init", help="Generate .spec.toml config")
     parser_init.add_argument("--force", action="store_true", help="Overwrite existing config")
 
     # list
@@ -1041,6 +1195,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser_sync = subparsers.add_parser("sync", help="Update all feature docs")
     parser_sync.add_argument("--dry-run", action="store_true", help="Preview changes")
 
+    # docs
+    parser_docs = subparsers.add_parser("docs", help="Display feature documentation")
+    parser_docs.add_argument("feature", help="Feature name")
+    parser_docs.add_argument("--view", choices=["pretty", "data"], default="pretty",
+                            help="Output view: pretty (with boxy) or data (plain for AI/scripting)")
+
     # check
     parser_check = subparsers.add_parser("check", help="Validate configuration")
     parser_check.add_argument("--missing-docs", action="store_true", help="Report missing docs")
@@ -1059,9 +1219,18 @@ def main(argv: List[str]) -> int:
     if hasattr(args, 'config') and args.config:
         config_path = args.config
     else:
-        config_path = repo.root / ".feat.toml"
+        config_path = repo.root / ".spec.toml"
 
     config = Config.load(config_path)
+
+    # Validate language requirements (except for init command)
+    if args.command != "init":
+        errors = config.validate(repo.root)
+        if errors:
+            print("error: invalid configuration", file=sys.stderr)
+            for err in errors:
+                print(f"  - {err}", file=sys.stderr)
+            sys.exit(1)
 
     # Dispatch to command handler
     if args.command == "init":
@@ -1074,11 +1243,13 @@ def main(argv: List[str]) -> int:
         return cmd_update(args, config, repo)
     elif args.command == "sync":
         return cmd_sync(args, config, repo)
+    elif args.command == "docs":
+        return cmd_docs(args, config, repo)
     elif args.command == "check":
         return cmd_check(args, config, repo)
     else:
         print("error: no command specified", file=sys.stderr)
-        print("run 'feat2.py --help' for usage", file=sys.stderr)
+        print("run 'feat --help' for usage", file=sys.stderr)
         return 1
 
 

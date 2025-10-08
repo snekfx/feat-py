@@ -1,144 +1,324 @@
-# feat-py
+# feat - Cross-Language Feature Documentation Tool
 
-Cross-language feature documentation tool for analyzing and documenting public API surfaces across Rust, Python, and other languages.
+`feat` is a lightweight tool that discovers, inspects, and documents feature API surfaces across Rust, Python, and TypeScript codebases. It keeps documentation aligned with code through automatic sentinel block updates.
 
-## What is feat?
+## What It Does
 
-`feat` is a lightweight tool that automatically discovers, inspects, and documents the public API surface of features in your codebase. It uses regex-based parsing to extract public items (functions, structs, classes, etc.) and maintains synchronized documentation using sentinel blocks in markdown files.
+- **Auto-discovers features** by scanning your project's module structure
+- **Extracts public API surfaces** (functions, structs, enums, classes, etc.)
+- **Updates documentation** using sentinel blocks for precise, non-invasive updates
+- **Works across languages** with pluggable parser architecture
 
 ## Quick Start
 
-```bash
-# Install to local bin
-cd ~/repos/code/python/snekfx/feat-py
-bin/deploy.sh
+### Installation
 
-# Initialize in your project
-cd /path/to/your/project
+Deploy feat globally to use across all projects:
+
+```bash
+cd ~/repos/code/python/snekfx/feat-py
+./bin/deploy.sh
+```
+
+This installs `feat` to `~/.local/bin/snek/feat`.
+
+### Basic Usage
+
+```bash
+# Navigate to any Rust/Python project
+cd ~/my-rust-project
+
+# Initialize configuration (creates .spec.toml)
 feat init
 
 # List discovered features
 feat list
 
-# Inspect a feature's public API
-feat scan global
+# Inspect a feature's API surface
+feat scan my_feature
 
 # Update feature documentation
-feat update global
+feat update my_feature
 
-# Sync all feature docs
+# Sync all feature docs at once
 feat sync
 ```
 
-## Key Features
+## Requirements
 
-- **Language Support**: Rust, Python (TypeScript stub available)
-- **Auto-Discovery**: Automatically finds features from your source tree
-- **Smart Documentation**: Updates sentinel blocks in markdown files
-- **Flexible Configuration**: Uses `.feat.toml` for customization
-- **Repository-Agnostic**: Works from any directory in your project
+**feat requires:**
+- Valid git repository (`.git` directory)
+- Project manifest for configured languages:
+  - **Rust**: `Cargo.toml` in repo root
+  - **Python**: `pyproject.toml`, `setup.py`, or `setup.cfg` in repo root
 
-## Documentation
-
-See [docs/USING_FEAT.md](docs/USING_FEAT.md) for complete usage guide and examples.
-
-Example feature documentation files can be found in [docs/examples/](docs/examples/).
+The tool will error immediately if these requirements aren't met.
 
 ## Configuration
 
-Place a `.feat.toml` in your repository root:
+Create `.spec.toml` in your repository root:
 
 ```toml
+# Where to scan for features (subdirectories = features)
 features_root = "src"
-docs_root = "docs/features"
+
+# Where feature documentation lives
+docs_root = "docs/feats"
+
+# Documentation file naming pattern
 doc_pattern = "FEATURES_{FEATURE}.md"
+
+# Languages to parse
 languages = ["rust"]
+
+# Auto-discover features from features_root
 auto_discover = true
 
+# Exclusion patterns
 exclude = [
     "**/tests/**",
     "**/target/**",
 ]
 
+# Explicit feature mappings (override auto-discovery)
 [features]
-# Explicit mappings override auto-discovery
-global = ["src/global"]
+# my_feature = ["src/my_feature"]
 ```
 
-## Usage Examples
-
-```bash
-# Generate config
-feat init
-
-# List features with details
-feat list --verbose
-
-# Scan feature with JSON output
-feat scan global --format json
-
-# Update specific feature doc
-feat update global --doc path/to/doc.md
-
-# Sync all docs (dry run first)
-feat sync --dry-run
-feat sync
-
-# Check for issues
-feat check --missing-docs
-```
-
-## Installation from Source
-
-```bash
-# Using pyproject.toml
-pip install -e .
-
-# Or use the deploy script
-bin/deploy.sh
-```
+Run `feat init` to generate this file with sensible defaults.
 
 ## How It Works
 
-1. Detects repository root (looks for `.git`, `Cargo.toml`, etc.)
-2. Loads `.feat.toml` configuration or uses defaults
-3. Discovers features from source tree or explicit mappings
-4. Parses source files using language-specific regex patterns
-5. Generates/updates documentation using sentinel blocks
+### 1. Repository Detection
+Walks up from current directory to find `.git`, `Cargo.toml`, or other project markers.
 
-## Documentation Workflow
+### 2. Feature Discovery
+- **Auto-discovery**: Scans `features_root` (default: `src/`), treats subdirectories as features
+- **Explicit mapping**: Define features in `.spec.toml` `[features]` section
 
-Feature docs use sentinel blocks for automatic updates:
+### 3. API Surface Extraction
+Uses language-specific parsers to extract public items:
+
+**Rust:**
+- `pub fn`, `pub struct`, `pub enum`, `pub trait`, `pub type`
+- `pub use` re-exports
+- `#[macro_export]` macros
+
+**Python:**
+- Public classes (`class Foo`)
+- Public functions (`def foo`)
+- Public async functions (`async def foo`)
+
+### 4. Documentation Updates
+Updates or creates sentinel blocks in markdown files:
 
 ```markdown
-<!-- feat:global -->
+<!-- feat:my_feature -->
 
-_Generated by feat.py._
+_Generated by feat._
 
-* `src/global/mod.rs`
-  - fn init (line 10)
-  - struct Config (line 5)
+* `src/my_feature/core.rs`
+  - fn process (line 42)
+  - struct Config (line 10)
 
-<!-- /feat:global -->
+* `src/my_feature/utils.rs`
+  - fn helper (line 7)
+
+<!-- /feat:my_feature -->
 ```
 
-Manual documentation can be added outside these blocks.
+Content outside sentinel blocks is preserved.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `feat init` | Generate `.spec.toml` configuration |
+| `feat list` | Show discovered features |
+| `feat list --verbose` | Show features with file/item counts |
+| `feat scan <feature>` | Inspect feature API surface |
+| `feat scan <feature> --format json` | JSON output |
+| `feat docs <feature>` | Display feature documentation (with boxy) |
+| `feat docs <feature> --view=data` | Plain output for AI/scripting |
+| `feat update <feature>` | Update feature documentation |
+| `feat update <feature> --doc <path>` | Update specific doc file |
+| `feat sync` | Update all feature docs |
+| `feat sync --dry-run` | Preview changes without writing |
+| `feat check` | Validate configuration |
+| `feat check --missing-docs` | Report missing documentation |
+
+## Workflow Examples
+
+### Starting a New Project
+
+```bash
+cd my-rust-project
+feat init                   # Generate .spec.toml
+feat list                   # See auto-discovered features
+feat sync                   # Generate stub docs for all features
+```
+
+### After Refactoring
+
+```bash
+feat sync                   # Update all feature docs
+git diff docs/              # Review documentation changes
+git add docs/ && git commit -m "Update feature docs"
+```
+
+### Documenting a Specific Feature
+
+```bash
+feat scan colors            # See what's in the feature
+feat update colors          # Update/create docs
+# Edit docs/feats/FEATURES_COLORS.md manually
+feat update colors          # Re-run to update sentinel block
+feat docs colors            # Display documentation (pretty with boxy)
+feat docs colors --view=data # Plain output for AI
+```
+
+## Language Support
+
+| Language | Status | Parser |
+|----------|--------|--------|
+| Rust | ✅ Full | Regex-based extraction |
+| Python | ✅ Full | Regex-based extraction |
+| TypeScript | 🚧 Stub | Not implemented |
+
+## Design Philosophy
+
+**Convention over configuration**
+- Works zero-config in standard project layouts
+- Auto-discovers features from directory structure
+- Sensible defaults for everything
+
+**Lightweight parsing**
+- No compiler dependencies
+- Fast regex-based extraction
+- Portable across platforms
+
+**Non-invasive documentation**
+- Only updates designated sentinel blocks
+- Manual content outside blocks preserved
+- Version control friendly
+
+## Boxy Integration
+
+feat supports optional pretty output via [boxy](https://github.com/your-org/boxy):
+
+```bash
+# Pretty display with boxy (default)
+feat docs global
+
+# Plain output for AI/scripting
+feat docs global --view=data
+
+# Disable boxy globally
+export REPOS_USE_BOXY=1  # Shell convention: 1=disabled
+feat docs global
+```
+
+**Features:**
+- Automatic fallback if boxy not available
+- Themed borders and titles
+- `--view=data` mode for plain output (AI-friendly)
+
+## Advanced Usage
+
+### Explicit Feature Mappings
+
+Override auto-discovery for complex layouts:
+
+```toml
+[features]
+# Map feature name to multiple source paths
+networking = ["src/net", "src/protocols"]
+storage = ["src/db", "src/cache"]
+```
+
+### Custom Documentation Paths
+
+```bash
+# Update custom doc file
+feat update my_feature --doc docs/custom/my-doc.md
+```
+
+### Multi-Language Projects
+
+```toml
+languages = ["rust", "python"]
+```
+
+The tool will parse both `.rs` and `.py` files, detect primary language by file count.
+
+## Troubleshooting
+
+**Error: not in a repository**
+- feat requires a valid git repo with `.git` directory
+- Ensure you're inside a repository
+
+**Error: rust language configured but Cargo.toml not found**
+- feat validates language requirements strictly
+- Add `Cargo.toml` or update `languages` in `.spec.toml`
+
+**No features discovered**
+- Check `features_root` points to correct directory
+- Verify directory has subdirectories (each = one feature)
+- Use `feat check` to diagnose issues
+
+**Parsing errors**
+- Check file encoding (UTF-8 required)
+- Complex nested declarations may be missed (regex limitations)
+
+## Documentation
+
+- **[USING_FEAT.md](docs/USING_FEAT.md)** - Comprehensive usage guide
+- **[QUICK_START.md](docs/QUICK_START.md)** - Quick start tutorial
+- **[FEAT_PATTERNS.md](docs/FEAT_PATTERNS.md)** - Pattern analysis across projects
+- **[docs/examples/](docs/examples/)** - Real-world examples
+
+## Architecture
+
+```
+feat-py/
+├── feat.py              # Main script (1087 lines)
+├── bin/deploy.sh        # Deployment script
+├── pyproject.toml       # pip package config
+└── docs/
+    ├── USING_FEAT.md    # Usage guide
+    ├── FEAT_PATTERNS.md # Pattern reference
+    └── examples/        # Example configs
+```
+
+**Core components:**
+- `RepoContext` - Repository detection and validation
+- `Config` - Configuration loading and validation
+- `Discovery` - Feature auto-discovery
+- `Parser` - Language-specific API extraction
+- `DocUpdater` - Sentinel block management
+
+## Contributing
+
+Contributions welcome:
+- Additional language parsers (Go, C++, Java, etc.)
+- Enhanced TypeScript support
+- Improved pattern matching
+- Test coverage
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file.
+MIT License
 
 ## Related Tools
 
-- [blade-py](../blade-py/) - Rust dependency management tool
-- RSB Module Specifications - Project-specific patterns
+- [rustdoc](https://doc.rust-lang.org/rustdoc/) - Official Rust documentation
+- [Sphinx](https://www.sphinx-doc.org/) - Python documentation builder
+- [TypeDoc](https://typedoc.org/) - TypeScript documentation
 
-## Development
+`feat` complements these by providing lightweight, cross-language feature inventories in markdown format for multi-language projects.
 
-```bash
-# Run tests (if available)
-pytest
+---
 
-# Deploy locally
-bin/deploy.sh
-```
+**Version:** 2.0.0
+**Status:** ✅ Production Ready
+**Deployment:** `./bin/deploy.sh`
