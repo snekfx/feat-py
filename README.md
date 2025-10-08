@@ -1,6 +1,6 @@
 # feat - Cross-Language Feature Documentation Tool
 
-`feat` is a lightweight tool that discovers, inspects, and documents feature API surfaces across Rust, Python, and TypeScript codebases. It keeps documentation aligned with code through automatic sentinel block updates.
+`feat` is a lightweight tool that discovers, inspects, and documents feature API surfaces across Rust, Python, and TypeScript codebases. It keeps documentation aligned with code through automatic sentinel block updates and provides cross-project feature lookup via a centralized brain registry.
 
 ## What It Does
 
@@ -8,6 +8,7 @@
 - **Extracts public API surfaces** (functions, structs, enums, classes, etc.)
 - **Updates documentation** using sentinel blocks for precise, non-invasive updates
 - **Works across languages** with pluggable parser architecture
+- **Syncs to brain registry** for cross-project feature documentation lookup
 
 ## Quick Start
 
@@ -40,8 +41,12 @@ feat scan my_feature
 # Update feature documentation
 feat update my_feature
 
-# Sync all feature docs at once
+# Sync all feature docs (updates local + syncs to brain)
 feat sync
+
+# View features from other projects
+feat projects              # List all projects in brain
+feat docs rsb global       # View RSB's global feature from anywhere
 ```
 
 ## Requirements
@@ -139,11 +144,13 @@ Content outside sentinel blocks is preserved.
 | `feat scan <feature>` | Inspect feature API surface |
 | `feat scan <feature> --format json` | JSON output |
 | `feat docs <feature>` | Display feature documentation (with boxy) |
+| `feat docs <project> <feature>` | Display feature from any project in brain |
 | `feat docs <feature> --view=data` | Plain output for AI/scripting |
 | `feat update <feature>` | Update feature documentation |
 | `feat update <feature> --doc <path>` | Update specific doc file |
-| `feat sync` | Update all feature docs |
+| `feat sync` | Update all feature docs + sync to brain |
 | `feat sync --dry-run` | Preview changes without writing |
+| `feat projects` | List all projects in brain registry |
 | `feat check` | Validate configuration |
 | `feat check --missing-docs` | Report missing documentation |
 
@@ -201,6 +208,47 @@ feat docs colors --view=data # Plain output for AI
 - Only updates designated sentinel blocks
 - Manual content outside blocks preserved
 - Version control friendly
+
+## Brain Registry
+
+`feat sync` automatically syncs feature documentation to a centralized brain registry at `~/repos/docs/brain/dev/proj/feat/`, enabling cross-project feature lookup.
+
+**How it works:**
+1. Run `feat sync` in any project to update docs and sync to brain
+2. Brain stores: `<project>/.spec.toml` + all `FEATURES_*.md` files
+3. Access features from any project using `feat docs <project> <feature>`
+
+**Project name detection (fallback chain):**
+1. `.spec.toml` - `project_name = "my-project"`
+2. `Cargo.toml` - `[package] name`
+3. Directory name (e.g., `rsb` from `/path/to/rsb/`)
+
+**Commands:**
+```bash
+# Sync current project to brain
+cd ~/my-project
+feat sync
+
+# View all projects in brain
+feat projects
+
+# View feature from another project (from anywhere)
+feat docs rsb global
+feat docs my-project networking
+```
+
+**Brain structure:**
+```
+~/repos/docs/brain/dev/proj/feat/
+├── rsb/
+│   ├── .spec.toml
+│   ├── FEATURES_GLOBAL.md
+│   ├── FEATURES_CLI.md
+│   └── ...
+├── my-project/
+│   ├── .spec.toml
+│   └── FEATURES_*.md
+```
 
 ## Boxy Integration
 

@@ -7,8 +7,8 @@ SNAKE_BIN_DIR="$HOME/.local/bin/snek"
 # Resolve repository root from bin/
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Extract version from feat.py or default
-VERSION=$(grep -E "^__version__|^VERSION\s*=" "$ROOT_DIR/feat.py" | head -1 | cut -d'"' -f2 2>/dev/null || echo "2.0.0-dev")
+# Extract version from pyproject.toml or default
+VERSION=$(grep '^version = ' "$ROOT_DIR/pyproject.toml" | head -1 | cut -d'"' -f2 2>/dev/null || echo "2.0.0-dev")
 
 # Display deployment ceremony
 echo "╔════════════════════════════════════════════════╗"
@@ -28,9 +28,13 @@ FEAT_SOURCE="$ROOT_DIR/feat.py"
 FEAT_TARGET="$SNAKE_BIN_DIR/feat"
 
 if [ -f "$FEAT_SOURCE" ]; then
-    # Deploy as feat
-    if ! cp "$FEAT_SOURCE" "$FEAT_TARGET"; then
+    # Deploy as feat with version injection
+    # Replace the get_version() function with hardcoded version
+    sed "s/^__version__ = get_version()$/__version__ = \"$VERSION\"/" "$FEAT_SOURCE" > "$FEAT_TARGET.tmp"
+
+    if ! mv "$FEAT_TARGET.tmp" "$FEAT_TARGET"; then
         echo "❌ Failed to copy feat to $FEAT_TARGET"
+        rm -f "$FEAT_TARGET.tmp"
         exit 1
     fi
 
@@ -39,7 +43,7 @@ if [ -f "$FEAT_SOURCE" ]; then
         exit 1
     fi
 
-    echo "✅ Feat tool deployed to $FEAT_TARGET"
+    echo "✅ Feat tool deployed to $FEAT_TARGET (v$VERSION injected)"
 
     # Test the deployment
     echo "🧪 Testing feat deployment..."

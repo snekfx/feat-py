@@ -52,6 +52,25 @@ except ImportError:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# VERSION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def get_version():
+    """Read version from pyproject.toml"""
+    try:
+        pyproject_path = pathlib.Path(__file__).parent / "pyproject.toml"
+        if pyproject_path.exists():
+            with open(pyproject_path, 'rb') as f:
+                pyproject_data = tomllib.load(f)
+            return pyproject_data.get('project', {}).get('version', 'unknown')
+    except Exception:
+        pass
+    return 'unknown'
+
+__version__ = get_version()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # BOXY INTEGRATION
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -161,6 +180,7 @@ class Config:
     auto_discover: bool = True
     exclude: List[str] = dataclasses.field(default_factory=list)
     features: Dict[str, List[str]] = dataclasses.field(default_factory=dict)
+    project_name: Optional[str] = None  # Project name for global registry
 
     @staticmethod
     def load(path: pathlib.Path) -> Config:
@@ -191,6 +211,7 @@ class Config:
             auto_discover=data.get("auto_discover", True),
             exclude=data.get("exclude", []),
             features=data.get("features", {}),
+            project_name=data.get("project_name"),
         )
 
     def validate(self, repo_root: Optional[pathlib.Path] = None) -> List[str]:
@@ -218,6 +239,33 @@ class Config:
                     errors.append("python language configured but no pyproject.toml/setup.py found in repository root")
 
         return errors
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROJECT NAME DETECTION
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def detect_project_name(config: Config, repo_root: pathlib.Path) -> str:
+    """Detect project name using fallback chain: .spec.toml → Cargo.toml → folder name."""
+    # 1. Check .spec.toml project_name
+    if config.project_name:
+        return config.project_name
+
+    # 2. Check Cargo.toml [package] name
+    cargo_toml = repo_root / "Cargo.toml"
+    if cargo_toml.exists() and tomllib is not None:
+        try:
+            with open(cargo_toml, "rb") as f:
+                cargo_data = tomllib.load(f)
+                package_name = cargo_data.get("package", {}).get("name")
+                if package_name:
+                    return package_name
+        except Exception:
+            pass  # Fall through to folder name
+
+    # 3. Use folder name as fallback
+    return repo_root.name
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -981,6 +1029,46 @@ def cmd_update(args: argparse.Namespace, config: Config, repo: RepoContext) -> i
     return 0 if success else 1
 
 
+def sync_to_brain(config: Config, repo: RepoContext, features: Dict[str, Feature], resolver: 'DocResolver') -> None:
+    """Sync feature docs and .spec.toml to brain registry."""
+    # Determine brain path
+    brain_base = pathlib.Path.home() / "repos" / "docs" / "brain" / "dev" / "proj" / "feat"
+
+    # Detect project name
+    project_name = detect_project_name(config, repo.root)
+
+    # Create project directory in brain
+    brain_project_dir = brain_base / project_name
+    brain_project_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy .spec.toml
+    spec_source = repo.root / ".spec.toml"
+    if spec_source.exists():
+        spec_target = brain_project_dir / ".spec.toml"
+        shutil.copy2(spec_source, spec_target)
+
+    # Copy README.md if it exists
+    readme_source = repo.root / "README.md"
+    if readme_source.exists():
+        readme_target = brain_project_dir / "README.md"
+        shutil.copy2(readme_source, readme_target)
+
+    # Copy all feature docs
+    copied_count = 0
+    for name in sorted(features.keys()):
+        feature = features[name]
+        doc_path = resolver.resolve(feature, include_stubs=True)
+
+        if doc_path and doc_path.exists():
+            target_path = brain_project_dir / doc_path.name
+            shutil.copy2(doc_path, target_path)
+            copied_count += 1
+
+    readme_marker = " + README" if readme_source.exists() else ""
+    print(f"\n📋 Synced to brain: {project_name} ({copied_count} docs + .spec.toml{readme_marker})")
+    print(f"   Location: {brain_project_dir}")
+
+
 def cmd_sync(args: argparse.Namespace, config: Config, repo: RepoContext) -> int:
     """Update all feature documentation."""
     discovery = Discovery(config, repo)
@@ -1038,33 +1126,76 @@ def cmd_sync(args: argparse.Namespace, config: Config, repo: RepoContext) -> int
             summary_parts.append(f"{failed} failed")
         print(f"\nSummary: {', '.join(summary_parts)}")
 
+        # Sync to brain registry
+        if not args.dry_run:
+            sync_to_brain(config, repo, features, resolver)
+
     return 0 if failed == 0 else 1
 
 
-def cmd_docs(args: argparse.Namespace, config: Config, repo: RepoContext) -> int:
+def cmd_docs(args: argparse.Namespace, config: Optional[Config], repo: Optional[RepoContext]) -> int:
     """Display feature documentation."""
-    discovery = Discovery(config, repo)
-    features = discovery.discover()
+    # Check if this is cross-project lookup: feat docs <project> <feature>
+    # When two args: args.feature=project, args.project=feature
+    if args.project:
+        # Two args provided: cross-project lookup
+        project_name = args.feature  # First arg is project
+        feature_name = args.project  # Second arg is feature
 
-    feature_name = args.feature
-    if feature_name not in features:
-        print(f"error: unknown feature '{feature_name}'", file=sys.stderr)
-        print(f"run 'feat list' to see available features", file=sys.stderr)
-        return 1
+        # Cross-project lookup from brain registry
+        brain_base = pathlib.Path.home() / "repos" / "docs" / "brain" / "dev" / "proj" / "feat"
+        brain_project_dir = brain_base / project_name
 
-    feature = features[feature_name]
-    resolver = DocResolver(config, repo)
+        if not brain_project_dir.exists():
+            print(f"error: project '{project_name}' not found in brain registry", file=sys.stderr)
+            print(f"run 'feat projects' to see available projects", file=sys.stderr)
+            return 1
 
-    # Resolve doc path
-    doc_path = resolver.resolve(feature, include_stubs=True)
+        # Handle README as special case
+        if feature_name.lower() == "readme":
+            doc_path = brain_project_dir / "README.md"
+            if not doc_path.exists():
+                print(f"error: README.md not found for project '{project_name}'", file=sys.stderr)
+                return 1
+            is_stub = False
+        else:
+            # Find the feature doc in brain
+            doc_pattern = f"FEATURES_{feature_name.upper()}.md"
+            doc_path = brain_project_dir / doc_pattern
+
+            # Also check stub
+            if not doc_path.exists():
+                stub_pattern = f"FEATURES_{feature_name.upper()}.stub.md"
+                doc_path = brain_project_dir / stub_pattern
+
+            if not doc_path.exists():
+                print(f"error: feature '{feature_name}' not found in project '{project_name}'", file=sys.stderr)
+                return 1
+
+            is_stub = doc_path.name.endswith('.stub.md')
+
+    else:
+        # Local project lookup
+        discovery = Discovery(config, repo)
+        features = discovery.discover()
+
+        feature_name = args.feature
+        if feature_name not in features:
+            print(f"error: unknown feature '{feature_name}'", file=sys.stderr)
+            print(f"run 'feat list' to see available features", file=sys.stderr)
+            return 1
+
+        feature = features[feature_name]
+        resolver = DocResolver(config, repo)
+
+        # Resolve doc path
+        doc_path = resolver.resolve(feature, include_stubs=True)
+        is_stub = resolver.is_stub(doc_path) if doc_path else False
 
     if not doc_path:
         print(f"error: no documentation found for feature '{feature_name}'", file=sys.stderr)
         print(f"run 'feat update {feature_name}' to create documentation", file=sys.stderr)
         return 1
-
-    # Check if stub
-    is_stub = resolver.is_stub(doc_path)
 
     # Read documentation content
     try:
@@ -1095,6 +1226,50 @@ def cmd_docs(args: argparse.Namespace, config: Config, repo: RepoContext) -> int
             final_name = doc_path.name.replace(".stub.md", ".md")
             print(f"   → rename to {final_name} when ready to finalize")
 
+    return 0
+
+
+def cmd_projects(args: argparse.Namespace) -> int:
+    """List all projects in brain registry."""
+    brain_base = pathlib.Path.home() / "repos" / "docs" / "brain" / "dev" / "proj" / "feat"
+
+    if not brain_base.exists():
+        print("No projects found in brain registry")
+        print(f"Brain location: {brain_base}")
+        return 0
+
+    projects = sorted([d.name for d in brain_base.iterdir() if d.is_dir()])
+
+    if not projects:
+        print("No projects found in brain registry")
+        print(f"Brain location: {brain_base}")
+        return 0
+
+    print(f"Found {len(projects)} project(s) in brain registry:\n")
+
+    for project in projects:
+        project_dir = brain_base / project
+        spec_file = project_dir / ".spec.toml"
+
+        # Count feature docs
+        feature_docs = list(project_dir.glob("FEATURES_*.md")) + list(project_dir.glob("FEATURES_*.stub.md"))
+        doc_count = len(feature_docs)
+
+        # Read project info from spec if available
+        project_info = ""
+        if spec_file.exists() and tomllib is not None:
+            try:
+                with open(spec_file, "rb") as f:
+                    spec_data = tomllib.load(f)
+                    languages = spec_data.get("languages", [])
+                    if languages:
+                        project_info = f" [{', '.join(languages)}]"
+            except Exception:
+                pass
+
+        print(f"  {project}: {doc_count} feature(s){project_info}")
+
+    print(f"\n📋 Brain location: {brain_base}")
     return 0
 
 
@@ -1161,6 +1336,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"feat {__version__}"
+    )
+
+    parser.add_argument(
         "--config",
         type=pathlib.Path,
         help="Path to .spec.toml config file (default: auto-detect)"
@@ -1197,9 +1378,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
     # docs
     parser_docs = subparsers.add_parser("docs", help="Display feature documentation")
-    parser_docs.add_argument("feature", help="Feature name")
+    parser_docs.add_argument("feature", help="Feature name (or project name if two args)")
+    parser_docs.add_argument("project", nargs="?", help="Optional: feature name when first arg is project")
     parser_docs.add_argument("--view", choices=["pretty", "data"], default="pretty",
                             help="Output view: pretty (with boxy) or data (plain for AI/scripting)")
+
+    # projects
+    parser_projects = subparsers.add_parser("projects", help="List all projects in brain registry")
 
     # check
     parser_check = subparsers.add_parser("check", help="Validate configuration")
@@ -1211,6 +1396,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: List[str]) -> int:
     """Main entry point."""
     args = parse_args(argv)
+
+    # projects command doesn't need repo/config
+    if args.command == "projects":
+        return cmd_projects(args)
+
+    # docs command with two args (cross-project) doesn't need repo/config
+    if args.command == "docs" and args.project:
+        # Cross-project docs from brain - no repo/config needed
+        return cmd_docs(args, None, None)
 
     # Detect repository root
     repo = RepoContext(root=args.root if hasattr(args, 'root') else None)
