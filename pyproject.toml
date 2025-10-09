@@ -35,7 +35,7 @@ dev = [
 ]
 
 [project.scripts]
-feat = "feat:main"
+featpy = "feat:main"
 
 [project.urls]
 Homepage = "https://github.com/snekfx/feat-py"

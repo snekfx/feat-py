@@ -1393,8 +1393,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: List[str]) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     """Main entry point."""
+    if argv is None:
+        argv = sys.argv[1:]
     args = parse_args(argv)
 
     # projects command doesn't need repo/config
@@ -1448,4 +1450,4 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(main())
